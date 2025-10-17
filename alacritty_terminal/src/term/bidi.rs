@@ -59,24 +59,22 @@ pub fn reorder_line(row: &Row<Cell>) -> Vec<Cell> {
     let text: String = cells.iter().map(|cell| cell.c).collect();
 
     // Determine paragraph direction from first cell with explicit BiDi mode.
-    let para_level = cells
-        .iter()
-        .find_map(|cell| {
-            if cell.bidi_flags().bits() == 0 {
-                return None;
-            }
+    let para_level = cells.iter().find_map(|cell| {
+        if cell.bidi_flags().bits() == 0 {
+            return None;
+        }
 
-            match cell.bidi_mode() {
-                BidiMode::Explicit { forced_dir } | BidiMode::Implicit { para_dir: forced_dir } => {
-                    match forced_dir {
-                        BidiDir::LTR => Some(Level::ltr()),
-                        BidiDir::RTL => Some(Level::rtl()),
-                        BidiDir::Default => None,
-                    }
-                },
-                BidiMode::Auto { .. } => None,
-            }
-        });
+        match cell.bidi_mode() {
+            BidiMode::Explicit { forced_dir } | BidiMode::Implicit { para_dir: forced_dir } => {
+                match forced_dir {
+                    BidiDir::LTR => Some(Level::ltr()),
+                    BidiDir::RTL => Some(Level::rtl()),
+                    BidiDir::Default => None,
+                }
+            },
+            BidiMode::Auto { .. } => None,
+        }
+    });
 
     // Run the BiDi algorithm.
     let bidi_info = BidiInfo::new(&text, para_level);

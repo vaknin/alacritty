@@ -7,8 +7,8 @@ use std::{cmp, mem, ptr, slice, str};
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
-use base64::Engine;
 use base64::engine::general_purpose::STANDARD as Base64;
+use base64::Engine;
 use bitflags::bitflags;
 use log::{debug, trace};
 use unicode_width::UnicodeWidthChar;
@@ -26,11 +26,11 @@ use crate::vte::ansi::{
     StandardCharset,
 };
 
+#[cfg(feature = "bidi_draft")]
+pub mod bidi;
 pub mod cell;
 pub mod color;
 pub mod search;
-#[cfg(feature = "bidi_draft")]
-pub mod bidi;
 
 /// Minimum number of columns.
 ///
@@ -1979,7 +1979,9 @@ impl<T: EventListener> Handler for Term<T> {
                         self.mode.remove(TermMode::SGR_MOUSE);
                         self.mode.insert(TermMode::UTF8_MOUSE);
                     },
-                    NamedPrivateMode::AlternateScroll => self.mode.insert(TermMode::ALTERNATE_SCROLL),
+                    NamedPrivateMode::AlternateScroll => {
+                        self.mode.insert(TermMode::ALTERNATE_SCROLL)
+                    },
                     NamedPrivateMode::LineWrap => self.mode.insert(TermMode::LINE_WRAP),
                     NamedPrivateMode::Origin => {
                         self.mode.insert(TermMode::ORIGIN);
@@ -1987,7 +1989,8 @@ impl<T: EventListener> Handler for Term<T> {
                     },
                     NamedPrivateMode::ColumnMode => self.deccolm(),
                     NamedPrivateMode::BlinkingCursor => {
-                        let style = self.cursor_style.get_or_insert(self.config.default_cursor_style);
+                        let style =
+                            self.cursor_style.get_or_insert(self.config.default_cursor_style);
                         style.blinking = true;
                         self.event_proxy.send_event(Event::CursorBlinkingChange);
                     },
@@ -2048,12 +2051,15 @@ impl<T: EventListener> Handler for Term<T> {
                     NamedPrivateMode::BracketedPaste => self.mode.remove(TermMode::BRACKETED_PASTE),
                     NamedPrivateMode::SgrMouse => self.mode.remove(TermMode::SGR_MOUSE),
                     NamedPrivateMode::Utf8Mouse => self.mode.remove(TermMode::UTF8_MOUSE),
-                    NamedPrivateMode::AlternateScroll => self.mode.remove(TermMode::ALTERNATE_SCROLL),
+                    NamedPrivateMode::AlternateScroll => {
+                        self.mode.remove(TermMode::ALTERNATE_SCROLL)
+                    },
                     NamedPrivateMode::LineWrap => self.mode.remove(TermMode::LINE_WRAP),
                     NamedPrivateMode::Origin => self.mode.remove(TermMode::ORIGIN),
                     NamedPrivateMode::ColumnMode => self.deccolm(),
                     NamedPrivateMode::BlinkingCursor => {
-                        let style = self.cursor_style.get_or_insert(self.config.default_cursor_style);
+                        let style =
+                            self.cursor_style.get_or_insert(self.config.default_cursor_style);
                         style.blinking = false;
                         self.event_proxy.send_event(Event::CursorBlinkingChange);
                     },
@@ -2370,7 +2376,11 @@ enum ModeState {
 
 impl From<bool> for ModeState {
     fn from(value: bool) -> Self {
-        if value { Self::Set } else { Self::Reset }
+        if value {
+            Self::Set
+        } else {
+            Self::Reset
+        }
     }
 }
 

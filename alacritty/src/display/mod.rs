@@ -32,28 +32,28 @@ use alacritty_terminal::index::{Column, Direction, Line, Point};
 use alacritty_terminal::selection::Selection;
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::{
-    self, LineDamageBounds, MIN_COLUMNS, MIN_SCREEN_LINES, Term, TermDamage, TermMode,
+    self, LineDamageBounds, Term, TermDamage, TermMode, MIN_COLUMNS, MIN_SCREEN_LINES,
 };
 use alacritty_terminal::vte::ansi::{CursorShape, NamedColor};
 
-use crate::config::UiConfig;
 use crate::config::debug::RendererPreference;
 use crate::config::font::Font;
 use crate::config::window::Dimensions;
 #[cfg(not(windows))]
 use crate::config::window::StartupMode;
+use crate::config::UiConfig;
 use crate::display::bell::VisualBell;
 use crate::display::color::{List, Rgb};
 use crate::display::content::{RenderableContent, RenderableCursor};
 use crate::display::cursor::IntoRects;
-use crate::display::damage::{DamageTracker, damage_y_to_viewport_y};
+use crate::display::damage::{damage_y_to_viewport_y, DamageTracker};
 use crate::display::hint::{HintMatch, HintState};
 use crate::display::meter::Meter;
 use crate::display::window::Window;
 use crate::event::{Event, EventType, Mouse, SearchState};
 use crate::message_bar::{MessageBuffer, MessageType};
 use crate::renderer::rects::{RenderLine, RenderLines, RenderRect};
-use crate::renderer::{self, GlyphCache, Renderer, platform};
+use crate::renderer::{self, platform, GlyphCache, Renderer};
 use crate::scheduler::{Scheduler, TimerId, Topic};
 use crate::string::{ShortenDirection, StrShortener};
 
@@ -814,22 +814,24 @@ impl Display {
         // Apply BiDi reordering if needed.
         #[cfg(feature = "bidi_draft")]
         {
-            use std::collections::HashMap;
             use alacritty_terminal::term::bidi;
             use alacritty_terminal::term::cell::Cell;
+            use std::collections::HashMap;
 
             let grid = terminal.grid();
             let mut reordered_lines: HashMap<usize, Vec<Cell>> = HashMap::new();
 
             // First pass: compute reordered lines that need BiDi.
             for cell in &grid_cells {
-                if !reordered_lines.contains_key(&cell.point.line) {
+                if let std::collections::hash_map::Entry::Vacant(e) =
+                    reordered_lines.entry(cell.point.line)
+                {
                     // Convert viewport line to grid line.
                     let grid_line = Line(-(display_offset as i32) + cell.point.line as i32);
                     let row = &grid[grid_line];
 
                     if bidi::line_needs_bidi(row) {
-                        reordered_lines.insert(cell.point.line, bidi::reorder_line(row));
+                        e.insert(bidi::reorder_line(row));
                     }
                 }
             }

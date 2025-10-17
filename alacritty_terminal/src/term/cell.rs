@@ -1,5 +1,5 @@
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
 
 use bitflags::bitflags;
 #[cfg(feature = "serde")]
@@ -269,6 +269,7 @@ impl Cell {
 
     #[cfg(feature = "bidi_draft")]
     #[inline]
+    #[allow(dead_code)]
     pub(super) fn set_bidi_flags(&mut self, bidi_flags: BidiFlags) {
         if bidi_flags.is_empty() && self.extra.is_none() {
             return;
@@ -290,7 +291,9 @@ impl Cell {
 
     #[cfg(feature = "bidi_draft")]
     pub(super) fn remove_bidi_flag(&mut self, bidi_flag: BidiFlags) {
-        self.extra.as_mut().map(|extra| Arc::make_mut(extra).bidi_flags.remove(bidi_flag));
+        if let Some(extra) = self.extra.as_mut() {
+            Arc::make_mut(extra).bidi_flags.remove(bidi_flag);
+        }
         let is_default_inner =
             self.extra.as_deref().map(|extra| *extra == Default::default()).unwrap_or(false);
         if is_default_inner {

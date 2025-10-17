@@ -10,6 +10,10 @@ Notable changes to the `alacritty_terminal` crate are documented in its
 
 ## 0.17.0-dev
 
+### Added
+
+- Support for bidirectional text rendering via `bidi_draft` feature flag
+
 ### Changed
 
 - Don't highlight hints on hover when the mouse cursor is hidden
