@@ -36,6 +36,44 @@ bitflags! {
     }
 }
 
+#[cfg(feature = "bidi_draft")]
+bitflags! {
+    /// BiDi flags for terminal cells.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+    #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+    pub(super) struct BidiFlags: u8 {
+        const EXPLICIT_DIRECTION = 0b0000_0001;
+        const NON_DEFAULT_PARA_DIR = 0b0000_0010;
+        const RTL_PARA_DIR = 0b0000_0100;
+        const AUTO_PARA_DIR = 0b0000_1000;
+        const BOX_MIRRORING = 0b0001_0000;
+    }
+}
+
+#[cfg(feature = "bidi_draft")]
+#[derive(Debug, Clone, Copy, PartialEq)]
+/// Text direction for bidirectional text.
+pub enum BidiDir {
+    /// Left-to-right text direction.
+    LTR,
+    /// Right-to-left text direction.
+    RTL,
+    /// Default text direction.
+    Default,
+}
+
+#[cfg(feature = "bidi_draft")]
+#[derive(Debug, Clone, Copy, PartialEq)]
+/// Bidirectional text mode.
+pub enum BidiMode {
+    /// Explicit bidirectional mode with forced direction.
+    Explicit { forced_dir: BidiDir },
+    /// Implicit bidirectional mode with paragraph direction.
+    Implicit { para_dir: BidiDir },
+    /// Automatic bidirectional mode with fallback direction.
+    Auto { fallback_para_dir: BidiDir },
+}
+
 /// Counter for hyperlinks without explicit ID.
 static HYPERLINK_ID_SUFFIX: AtomicU32 = AtomicU32::new(0);
 
@@ -126,6 +164,9 @@ pub struct CellExtra {
     zerowidth: Vec<char>,
     underline_color: Option<Color>,
     hyperlink: Option<Hyperlink>,
+    #[cfg(feature = "bidi_draft")]
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub(super) bidi_flags: BidiFlags,
 }
 
 /// Content and attributes of a single cell in the terminal grid.
@@ -218,6 +259,72 @@ impl Cell {
     #[inline]
     pub fn hyperlink(&self) -> Option<Hyperlink> {
         self.extra.as_ref()?.hyperlink.clone()
+    }
+
+    #[cfg(feature = "bidi_draft")]
+    #[inline]
+    pub(super) fn bidi_flags(&self) -> BidiFlags {
+        self.extra.as_ref().map(|extra| extra.bidi_flags).unwrap_or_default()
+    }
+
+    #[cfg(feature = "bidi_draft")]
+    #[inline]
+    pub(super) fn set_bidi_flags(&mut self, bidi_flags: BidiFlags) {
+        if bidi_flags.is_empty() && self.extra.is_none() {
+            return;
+        }
+
+        let extra = self.extra.get_or_insert(Default::default());
+        Arc::make_mut(extra).bidi_flags = bidi_flags;
+    }
+
+    #[cfg(feature = "bidi_draft")]
+    pub(super) fn insert_bidi_flag(&mut self, bidi_flag: BidiFlags) {
+        if bidi_flag.is_empty() && self.extra.is_none() {
+            return;
+        }
+
+        let extra = self.extra.get_or_insert(Default::default());
+        Arc::make_mut(extra).bidi_flags.insert(bidi_flag);
+    }
+
+    #[cfg(feature = "bidi_draft")]
+    pub(super) fn remove_bidi_flag(&mut self, bidi_flag: BidiFlags) {
+        self.extra.as_mut().map(|extra| Arc::make_mut(extra).bidi_flags.remove(bidi_flag));
+        let is_default_inner =
+            self.extra.as_deref().map(|extra| *extra == Default::default()).unwrap_or(false);
+        if is_default_inner {
+            self.extra = None;
+        }
+    }
+
+    /// Get the bidirectional text mode for this cell.
+    #[cfg(feature = "bidi_draft")]
+    #[inline]
+    pub fn bidi_mode(&self) -> BidiMode {
+        let bidi_flags = self.bidi_flags();
+        let dir = if !bidi_flags.contains(BidiFlags::NON_DEFAULT_PARA_DIR) {
+            BidiDir::Default
+        } else if bidi_flags.contains(BidiFlags::RTL_PARA_DIR) {
+            BidiDir::RTL
+        } else {
+            BidiDir::LTR
+        };
+
+        if bidi_flags.contains(BidiFlags::EXPLICIT_DIRECTION) {
+            BidiMode::Explicit { forced_dir: dir }
+        } else if bidi_flags.contains(BidiFlags::AUTO_PARA_DIR) {
+            BidiMode::Auto { fallback_para_dir: dir }
+        } else {
+            BidiMode::Implicit { para_dir: dir }
+        }
+    }
+
+    /// Check if box mirroring is enabled for this cell.
+    #[cfg(feature = "bidi_draft")]
+    #[inline]
+    pub fn bidi_box_mirroring(&self) -> bool {
+        self.bidi_flags().contains(BidiFlags::BOX_MIRRORING)
     }
 }
 

@@ -110,6 +110,7 @@ dependencies = [
  "serde",
  "serde_json",
  "signal-hook",
+ "unicode-bidi",
  "unicode-width",
  "vte",
  "windows-sys 0.59.0",
@@ -2045,6 +2046,12 @@ name = "tracing-core"
 version = "0.1.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b9d12581f227e93f094d3af2ae690a574abb8a2b9b7a96e7cfe9647b2b617678"
+
+[[package]]
+name = "unicode-bidi"
+version = "0.3.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c1cb5db39152898a79168971543b1cb5020dff7fe43c8dc468b0885f5e29df5"
 
 [[package]]
 name = "unicode-ident"

@@ -29,6 +29,8 @@ use crate::vte::ansi::{
 pub mod cell;
 pub mod color;
 pub mod search;
+#[cfg(feature = "bidi_draft")]
+pub mod bidi;
 
 /// Minimum number of columns.
 ///
@@ -327,6 +329,10 @@ pub struct Term<T> {
 
     /// Config directly for the terminal.
     config: Config,
+
+    /// Disable arrow key swapping for bidirectional text.
+    #[cfg(feature = "bidi_draft")]
+    pub bidi_disable_arrow_key_swapping: bool,
 }
 
 /// Configuration options for the [`Term`].
@@ -441,6 +447,8 @@ impl<T> Term<T> {
             selection: Default::default(),
             title: Default::default(),
             mode: Default::default(),
+            #[cfg(feature = "bidi_draft")]
+            bidi_disable_arrow_key_swapping: Default::default(),
         }
     }
 
@@ -1932,113 +1940,147 @@ impl<T: EventListener> Handler for Term<T> {
 
     #[inline]
     fn set_private_mode(&mut self, mode: PrivateMode) {
-        let mode = match mode {
-            PrivateMode::Named(mode) => mode,
-            PrivateMode::Unknown(mode) => {
-                debug!("Ignoring unknown mode {mode} in set_private_mode");
-                return;
-            },
-        };
-
-        trace!("Setting private mode: {mode:?}");
         match mode {
-            NamedPrivateMode::UrgencyHints => self.mode.insert(TermMode::URGENCY_HINTS),
-            NamedPrivateMode::SwapScreenAndSetRestoreCursor => {
-                if !self.mode.contains(TermMode::ALT_SCREEN) {
-                    self.swap_alt();
+            PrivateMode::Named(mode) => {
+                trace!("Setting private mode: {mode:?}");
+                match mode {
+                    NamedPrivateMode::UrgencyHints => self.mode.insert(TermMode::URGENCY_HINTS),
+                    NamedPrivateMode::SwapScreenAndSetRestoreCursor => {
+                        if !self.mode.contains(TermMode::ALT_SCREEN) {
+                            self.swap_alt();
+                        }
+                    },
+                    NamedPrivateMode::ShowCursor => self.mode.insert(TermMode::SHOW_CURSOR),
+                    NamedPrivateMode::CursorKeys => self.mode.insert(TermMode::APP_CURSOR),
+                    // Mouse protocols are mutually exclusive.
+                    NamedPrivateMode::ReportMouseClicks => {
+                        self.mode.remove(TermMode::MOUSE_MODE);
+                        self.mode.insert(TermMode::MOUSE_REPORT_CLICK);
+                        self.event_proxy.send_event(Event::MouseCursorDirty);
+                    },
+                    NamedPrivateMode::ReportCellMouseMotion => {
+                        self.mode.remove(TermMode::MOUSE_MODE);
+                        self.mode.insert(TermMode::MOUSE_DRAG);
+                        self.event_proxy.send_event(Event::MouseCursorDirty);
+                    },
+                    NamedPrivateMode::ReportAllMouseMotion => {
+                        self.mode.remove(TermMode::MOUSE_MODE);
+                        self.mode.insert(TermMode::MOUSE_MOTION);
+                        self.event_proxy.send_event(Event::MouseCursorDirty);
+                    },
+                    NamedPrivateMode::ReportFocusInOut => self.mode.insert(TermMode::FOCUS_IN_OUT),
+                    NamedPrivateMode::BracketedPaste => self.mode.insert(TermMode::BRACKETED_PASTE),
+                    // Mouse encodings are mutually exclusive.
+                    NamedPrivateMode::SgrMouse => {
+                        self.mode.remove(TermMode::UTF8_MOUSE);
+                        self.mode.insert(TermMode::SGR_MOUSE);
+                    },
+                    NamedPrivateMode::Utf8Mouse => {
+                        self.mode.remove(TermMode::SGR_MOUSE);
+                        self.mode.insert(TermMode::UTF8_MOUSE);
+                    },
+                    NamedPrivateMode::AlternateScroll => self.mode.insert(TermMode::ALTERNATE_SCROLL),
+                    NamedPrivateMode::LineWrap => self.mode.insert(TermMode::LINE_WRAP),
+                    NamedPrivateMode::Origin => {
+                        self.mode.insert(TermMode::ORIGIN);
+                        self.goto(0, 0);
+                    },
+                    NamedPrivateMode::ColumnMode => self.deccolm(),
+                    NamedPrivateMode::BlinkingCursor => {
+                        let style = self.cursor_style.get_or_insert(self.config.default_cursor_style);
+                        style.blinking = true;
+                        self.event_proxy.send_event(Event::CursorBlinkingChange);
+                    },
+                    NamedPrivateMode::SyncUpdate => (),
                 }
             },
-            NamedPrivateMode::ShowCursor => self.mode.insert(TermMode::SHOW_CURSOR),
-            NamedPrivateMode::CursorKeys => self.mode.insert(TermMode::APP_CURSOR),
-            // Mouse protocols are mutually exclusive.
-            NamedPrivateMode::ReportMouseClicks => {
-                self.mode.remove(TermMode::MOUSE_MODE);
-                self.mode.insert(TermMode::MOUSE_REPORT_CLICK);
-                self.event_proxy.send_event(Event::MouseCursorDirty);
+            PrivateMode::Unknown(mode) => {
+                #[cfg(feature = "bidi_draft")]
+                match mode {
+                    1243 => {
+                        trace!("Re-enabling RTL arrow key swapping");
+                        self.bidi_disable_arrow_key_swapping = false;
+                    },
+                    2500 => {
+                        trace!("Enabling RTL box mirroring");
+                        self.grid.cursor.template.insert_bidi_flag(cell::BidiFlags::BOX_MIRRORING);
+                    },
+                    2501 => {
+                        trace!("Enabling paragraph direction auto-detection");
+                        self.grid.cursor.template.insert_bidi_flag(cell::BidiFlags::AUTO_PARA_DIR);
+                    },
+                    _ => debug!("Ignoring unknown mode {mode} in set_private_mode"),
+                }
+
+                #[cfg(not(feature = "bidi_draft"))]
+                debug!("Ignoring unknown mode {mode} in set_private_mode");
             },
-            NamedPrivateMode::ReportCellMouseMotion => {
-                self.mode.remove(TermMode::MOUSE_MODE);
-                self.mode.insert(TermMode::MOUSE_DRAG);
-                self.event_proxy.send_event(Event::MouseCursorDirty);
-            },
-            NamedPrivateMode::ReportAllMouseMotion => {
-                self.mode.remove(TermMode::MOUSE_MODE);
-                self.mode.insert(TermMode::MOUSE_MOTION);
-                self.event_proxy.send_event(Event::MouseCursorDirty);
-            },
-            NamedPrivateMode::ReportFocusInOut => self.mode.insert(TermMode::FOCUS_IN_OUT),
-            NamedPrivateMode::BracketedPaste => self.mode.insert(TermMode::BRACKETED_PASTE),
-            // Mouse encodings are mutually exclusive.
-            NamedPrivateMode::SgrMouse => {
-                self.mode.remove(TermMode::UTF8_MOUSE);
-                self.mode.insert(TermMode::SGR_MOUSE);
-            },
-            NamedPrivateMode::Utf8Mouse => {
-                self.mode.remove(TermMode::SGR_MOUSE);
-                self.mode.insert(TermMode::UTF8_MOUSE);
-            },
-            NamedPrivateMode::AlternateScroll => self.mode.insert(TermMode::ALTERNATE_SCROLL),
-            NamedPrivateMode::LineWrap => self.mode.insert(TermMode::LINE_WRAP),
-            NamedPrivateMode::Origin => {
-                self.mode.insert(TermMode::ORIGIN);
-                self.goto(0, 0);
-            },
-            NamedPrivateMode::ColumnMode => self.deccolm(),
-            NamedPrivateMode::BlinkingCursor => {
-                let style = self.cursor_style.get_or_insert(self.config.default_cursor_style);
-                style.blinking = true;
-                self.event_proxy.send_event(Event::CursorBlinkingChange);
-            },
-            NamedPrivateMode::SyncUpdate => (),
         }
     }
 
     #[inline]
     fn unset_private_mode(&mut self, mode: PrivateMode) {
-        let mode = match mode {
-            PrivateMode::Named(mode) => mode,
-            PrivateMode::Unknown(mode) => {
-                debug!("Ignoring unknown mode {mode} in unset_private_mode");
-                return;
-            },
-        };
-
-        trace!("Unsetting private mode: {mode:?}");
         match mode {
-            NamedPrivateMode::UrgencyHints => self.mode.remove(TermMode::URGENCY_HINTS),
-            NamedPrivateMode::SwapScreenAndSetRestoreCursor => {
-                if self.mode.contains(TermMode::ALT_SCREEN) {
-                    self.swap_alt();
+            PrivateMode::Named(mode) => {
+                trace!("Unsetting private mode: {mode:?}");
+                match mode {
+                    NamedPrivateMode::UrgencyHints => self.mode.remove(TermMode::URGENCY_HINTS),
+                    NamedPrivateMode::SwapScreenAndSetRestoreCursor => {
+                        if self.mode.contains(TermMode::ALT_SCREEN) {
+                            self.swap_alt();
+                        }
+                    },
+                    NamedPrivateMode::ShowCursor => self.mode.remove(TermMode::SHOW_CURSOR),
+                    NamedPrivateMode::CursorKeys => self.mode.remove(TermMode::APP_CURSOR),
+                    NamedPrivateMode::ReportMouseClicks => {
+                        self.mode.remove(TermMode::MOUSE_REPORT_CLICK);
+                        self.event_proxy.send_event(Event::MouseCursorDirty);
+                    },
+                    NamedPrivateMode::ReportCellMouseMotion => {
+                        self.mode.remove(TermMode::MOUSE_DRAG);
+                        self.event_proxy.send_event(Event::MouseCursorDirty);
+                    },
+                    NamedPrivateMode::ReportAllMouseMotion => {
+                        self.mode.remove(TermMode::MOUSE_MOTION);
+                        self.event_proxy.send_event(Event::MouseCursorDirty);
+                    },
+                    NamedPrivateMode::ReportFocusInOut => self.mode.remove(TermMode::FOCUS_IN_OUT),
+                    NamedPrivateMode::BracketedPaste => self.mode.remove(TermMode::BRACKETED_PASTE),
+                    NamedPrivateMode::SgrMouse => self.mode.remove(TermMode::SGR_MOUSE),
+                    NamedPrivateMode::Utf8Mouse => self.mode.remove(TermMode::UTF8_MOUSE),
+                    NamedPrivateMode::AlternateScroll => self.mode.remove(TermMode::ALTERNATE_SCROLL),
+                    NamedPrivateMode::LineWrap => self.mode.remove(TermMode::LINE_WRAP),
+                    NamedPrivateMode::Origin => self.mode.remove(TermMode::ORIGIN),
+                    NamedPrivateMode::ColumnMode => self.deccolm(),
+                    NamedPrivateMode::BlinkingCursor => {
+                        let style = self.cursor_style.get_or_insert(self.config.default_cursor_style);
+                        style.blinking = false;
+                        self.event_proxy.send_event(Event::CursorBlinkingChange);
+                    },
+                    NamedPrivateMode::SyncUpdate => (),
                 }
             },
-            NamedPrivateMode::ShowCursor => self.mode.remove(TermMode::SHOW_CURSOR),
-            NamedPrivateMode::CursorKeys => self.mode.remove(TermMode::APP_CURSOR),
-            NamedPrivateMode::ReportMouseClicks => {
-                self.mode.remove(TermMode::MOUSE_REPORT_CLICK);
-                self.event_proxy.send_event(Event::MouseCursorDirty);
+            PrivateMode::Unknown(mode) => {
+                #[cfg(feature = "bidi_draft")]
+                match mode {
+                    1243 => {
+                        trace!("Disabling RTL arrow key swapping");
+                        self.bidi_disable_arrow_key_swapping = true;
+                    },
+                    2500 => {
+                        trace!("Disabling RTL box mirroring");
+                        self.grid.cursor.template.remove_bidi_flag(cell::BidiFlags::BOX_MIRRORING);
+                    },
+                    2501 => {
+                        trace!("Disabling paragraph direction auto-detection");
+                        self.grid.cursor.template.remove_bidi_flag(cell::BidiFlags::AUTO_PARA_DIR);
+                    },
+                    _ => debug!("Ignoring unknown mode {mode} in unset_private_mode"),
+                }
+
+                #[cfg(not(feature = "bidi_draft"))]
+                debug!("Ignoring unknown mode {mode} in unset_private_mode");
             },
-            NamedPrivateMode::ReportCellMouseMotion => {
-                self.mode.remove(TermMode::MOUSE_DRAG);
-                self.event_proxy.send_event(Event::MouseCursorDirty);
-            },
-            NamedPrivateMode::ReportAllMouseMotion => {
-                self.mode.remove(TermMode::MOUSE_MOTION);
-                self.event_proxy.send_event(Event::MouseCursorDirty);
-            },
-            NamedPrivateMode::ReportFocusInOut => self.mode.remove(TermMode::FOCUS_IN_OUT),
-            NamedPrivateMode::BracketedPaste => self.mode.remove(TermMode::BRACKETED_PASTE),
-            NamedPrivateMode::SgrMouse => self.mode.remove(TermMode::SGR_MOUSE),
-            NamedPrivateMode::Utf8Mouse => self.mode.remove(TermMode::UTF8_MOUSE),
-            NamedPrivateMode::AlternateScroll => self.mode.remove(TermMode::ALTERNATE_SCROLL),
-            NamedPrivateMode::LineWrap => self.mode.remove(TermMode::LINE_WRAP),
-            NamedPrivateMode::Origin => self.mode.remove(TermMode::ORIGIN),
-            NamedPrivateMode::ColumnMode => self.deccolm(),
-            NamedPrivateMode::BlinkingCursor => {
-                let style = self.cursor_style.get_or_insert(self.config.default_cursor_style);
-                style.blinking = false;
-                self.event_proxy.send_event(Event::CursorBlinkingChange);
-            },
-            NamedPrivateMode::SyncUpdate => (),
         }
     }
 
@@ -2094,40 +2136,83 @@ impl<T: EventListener> Handler for Term<T> {
         )));
     }
 
+    #[cfg(feature = "bidi_draft")]
+    #[inline]
+    fn set_scp(&mut self, char_path: ansi::ScpCharPath, update_mode: ansi::ScpUpdateMode) {
+        use cell::BidiFlags;
+
+        if update_mode != ansi::ScpUpdateMode::ImplementationDependant {
+            debug!(
+                "Only SCP with zero/default second parameter is supported, as the BiDi draft only \
+                 operates in the data component."
+            );
+            return;
+        }
+
+        match char_path {
+            ansi::ScpCharPath::Default => {
+                trace!("Setting (implementation-defined) default paragraph direction");
+                self.grid.cursor.template.remove_bidi_flag(BidiFlags::NON_DEFAULT_PARA_DIR);
+            },
+            ansi::ScpCharPath::LTR => {
+                trace!("Setting LTR paragraph direction");
+                self.grid.cursor.template.insert_bidi_flag(BidiFlags::NON_DEFAULT_PARA_DIR);
+                self.grid.cursor.template.remove_bidi_flag(BidiFlags::RTL_PARA_DIR);
+            },
+            ansi::ScpCharPath::RTL => {
+                trace!("Setting RTL paragraph direction");
+                self.grid.cursor.template.insert_bidi_flag(BidiFlags::NON_DEFAULT_PARA_DIR);
+                self.grid.cursor.template.insert_bidi_flag(BidiFlags::RTL_PARA_DIR);
+            },
+        }
+    }
+
     #[inline]
     fn set_mode(&mut self, mode: ansi::Mode) {
-        let mode = match mode {
-            ansi::Mode::Named(mode) => mode,
-            ansi::Mode::Unknown(mode) => {
-                debug!("Ignoring unknown mode {mode} in set_mode");
-                return;
-            },
-        };
-
-        trace!("Setting public mode: {mode:?}");
         match mode {
-            NamedMode::Insert => self.mode.insert(TermMode::INSERT),
-            NamedMode::LineFeedNewLine => self.mode.insert(TermMode::LINE_FEED_NEW_LINE),
+            ansi::Mode::Named(mode) => {
+                trace!("Setting public mode: {mode:?}");
+                match mode {
+                    NamedMode::Insert => self.mode.insert(TermMode::INSERT),
+                    NamedMode::LineFeedNewLine => self.mode.insert(TermMode::LINE_FEED_NEW_LINE),
+                }
+            },
+            ansi::Mode::Unknown(mode) => {
+                #[cfg(feature = "bidi_draft")]
+                if mode == 8 {
+                    trace!("Re-enabling BiDi implicit mode");
+                    self.grid.cursor.template.remove_bidi_flag(cell::BidiFlags::EXPLICIT_DIRECTION);
+                    return;
+                }
+
+                debug!("Ignoring unknown mode {mode} in set_mode");
+            },
         }
     }
 
     #[inline]
     fn unset_mode(&mut self, mode: ansi::Mode) {
-        let mode = match mode {
-            ansi::Mode::Named(mode) => mode,
-            ansi::Mode::Unknown(mode) => {
-                debug!("Ignoring unknown mode {mode} in unset_mode");
-                return;
-            },
-        };
-
-        trace!("Setting public mode: {mode:?}");
         match mode {
-            NamedMode::Insert => {
-                self.mode.remove(TermMode::INSERT);
-                self.mark_fully_damaged();
+            ansi::Mode::Named(mode) => {
+                trace!("Setting public mode: {mode:?}");
+                match mode {
+                    NamedMode::Insert => {
+                        self.mode.remove(TermMode::INSERT);
+                        self.mark_fully_damaged();
+                    },
+                    NamedMode::LineFeedNewLine => self.mode.remove(TermMode::LINE_FEED_NEW_LINE),
+                }
             },
-            NamedMode::LineFeedNewLine => self.mode.remove(TermMode::LINE_FEED_NEW_LINE),
+            ansi::Mode::Unknown(mode) => {
+                #[cfg(feature = "bidi_draft")]
+                if mode == 8 {
+                    trace!("Enabling BiDi explicit mode");
+                    self.grid.cursor.template.insert_bidi_flag(cell::BidiFlags::EXPLICIT_DIRECTION);
+                    return;
+                }
+
+                debug!("Ignoring unknown mode {mode} in unset_mode");
+            },
         }
     }
 

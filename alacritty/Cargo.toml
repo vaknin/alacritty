@@ -100,3 +100,4 @@ wayland = [
     "winit/wayland-csd-adwaita-crossfont",
 ]
 nightly = []
+bidi_draft = ["alacritty_terminal/bidi_draft"]

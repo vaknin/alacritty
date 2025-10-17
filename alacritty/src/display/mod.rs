@@ -811,6 +811,41 @@ impl Display {
         }
         terminal.reset_damage();
 
+        // Apply BiDi reordering if needed.
+        #[cfg(feature = "bidi_draft")]
+        {
+            use std::collections::HashMap;
+            use alacritty_terminal::term::bidi;
+            use alacritty_terminal::term::cell::Cell;
+
+            let grid = terminal.grid();
+            let mut reordered_lines: HashMap<usize, Vec<Cell>> = HashMap::new();
+
+            // First pass: compute reordered lines that need BiDi.
+            for cell in &grid_cells {
+                if !reordered_lines.contains_key(&cell.point.line) {
+                    // Convert viewport line to grid line.
+                    let grid_line = Line(-(display_offset as i32) + cell.point.line as i32);
+                    let row = &grid[grid_line];
+
+                    if bidi::line_needs_bidi(row) {
+                        reordered_lines.insert(cell.point.line, bidi::reorder_line(row));
+                    }
+                }
+            }
+
+            // Second pass: update cells with reordered data.
+            for cell in &mut grid_cells {
+                if let Some(reordered) = reordered_lines.get(&cell.point.line) {
+                    let col = cell.point.column.0;
+                    if col < reordered.len() {
+                        cell.character = reordered[col].c;
+                        cell.flags = reordered[col].flags;
+                    }
+                }
+            }
+        }
+
         // Drop terminal as early as possible to free lock.
         drop(terminal);
 
