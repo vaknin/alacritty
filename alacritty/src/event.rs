@@ -721,7 +721,16 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
             || self.mouse.right_button_state == ElementState::Pressed
         {
             let display_offset = self.terminal.grid().display_offset();
-            let point = self.mouse.point(&self.size_info(), display_offset);
+            let mut point = self.mouse.point(&self.size_info(), display_offset);
+
+            // Convert visual column to logical column for BiDi text (feature-gated).
+            #[cfg(feature = "bidi_draft")]
+            {
+                let row = &self.terminal.grid()[point.line];
+                let logical_col = alacritty_terminal::term::bidi::visual_column_to_logical(row, point.column.0);
+                point.column = Column(logical_col);
+            }
+
             self.update_selection(point, self.mouse.cell_side);
         }
 
@@ -1283,7 +1292,15 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
 
         // Load mouse point, treating message bar and padding as the closest cell.
         let display_offset = self.terminal().grid().display_offset();
-        let point = self.mouse().point(&self.size_info(), display_offset);
+        let mut point = self.mouse().point(&self.size_info(), display_offset);
+
+        // Convert visual column to logical column for BiDi text (feature-gated).
+        #[cfg(feature = "bidi_draft")]
+        {
+            let row = &self.terminal().grid()[point.line];
+            let logical_col = alacritty_terminal::term::bidi::visual_column_to_logical(row, point.column.0);
+            point.column = Column(logical_col);
+        }
 
         let cell_side = self.mouse().cell_side;
 

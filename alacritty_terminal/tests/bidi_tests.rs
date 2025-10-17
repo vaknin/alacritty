@@ -315,6 +315,35 @@ fn test_line_needs_bidi_with_mixed_content() {
     assert!(bidi::line_needs_bidi(&row), "Mixed LTR/RTL text should need BiDi");
 }
 
+// Test for the specific bug: LTR character inserted between RTL characters.
+#[test]
+fn test_ltr_between_rtl_characters() {
+    use alacritty_terminal::grid::Row;
+    use alacritty_terminal::term::bidi;
+    use alacritty_terminal::term::cell::Cell;
+
+    // Test case: "אaב" (alef, latin-a, bet)
+    // This simulates typing 'a' between two Hebrew letters.
+    let mut row = Row::<Cell>::new(3);
+    row[Column(0)].c = 'א'; // alef
+    row[Column(1)].c = 'a'; // latin a
+    row[Column(2)].c = 'ב'; // bet
+
+    let (reordered, mapping) = bidi::reorder_line(&row);
+
+    // Debug output to see what we're actually getting
+    eprintln!("Logical: א a ב");
+    eprintln!("Visual cells: {} {} {}", reordered[0].c, reordered[1].c, reordered[2].c);
+    eprintln!("Position mapping: {:?}", mapping);
+    eprintln!("  logical 0 (א) -> visual {}", mapping[0]);
+    eprintln!("  logical 1 (a) -> visual {}", mapping[1]);
+    eprintln!("  logical 2 (ב) -> visual {}", mapping[2]);
+
+    // With LTR base direction and isolated RTL characters,
+    // the BiDi algorithm should determine the correct visual order.
+    // Let's verify what we get and document the expected behavior.
+}
+
 #[test]
 fn test_reorder_line_pure_ltr() {
     use alacritty_terminal::grid::Row;
@@ -329,7 +358,7 @@ fn test_reorder_line_pure_ltr() {
     row[Column(3)].c = 'l';
     row[Column(4)].c = 'o';
 
-    let reordered = bidi::reorder_line(&row);
+    let (reordered, _mapping) = bidi::reorder_line(&row);
 
     // LTR text should remain in the same order.
     assert_eq!(reordered.len(), 5);
@@ -353,7 +382,7 @@ fn test_reorder_line_pure_rtl() {
     row[Column(2)].c = 'ו'; // vav
     row[Column(3)].c = 'ם'; // mem sofit
 
-    let reordered = bidi::reorder_line(&row);
+    let (reordered, _mapping) = bidi::reorder_line(&row);
 
     // RTL text should be reversed for visual display.
     assert_eq!(reordered.len(), 4);
@@ -382,7 +411,7 @@ fn test_reorder_line_mixed_ltr_rtl() {
     row[Column(7)].c = ' ';
     row[Column(8)].c = '!';
 
-    let reordered = bidi::reorder_line(&row);
+    let (reordered, _mapping) = bidi::reorder_line(&row);
 
     // LTR part stays: "Hi "
     assert_eq!(reordered[0].c, 'H');

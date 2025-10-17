@@ -44,7 +44,7 @@ use crate::config::window::StartupMode;
 use crate::config::UiConfig;
 use crate::display::bell::VisualBell;
 use crate::display::color::{List, Rgb};
-use crate::display::content::{RenderableContent, RenderableCursor};
+use crate::display::content::{RenderableCell, RenderableContent, RenderableCursor};
 use crate::display::cursor::IntoRects;
 use crate::display::damage::{damage_y_to_viewport_y, DamageTracker};
 use crate::display::hint::{HintMatch, HintState};
@@ -800,6 +800,7 @@ impl Display {
         let vi_mode = terminal.mode().contains(TermMode::VI);
         let vi_cursor_point = if vi_mode { Some(terminal.vi_mode_cursor.point) } else { None };
 
+
         // Add damage from the terminal.
         match terminal.damage() {
             TermDamage::Full => self.damage_tracker.frame().mark_fully_damaged(),
@@ -819,7 +820,7 @@ impl Display {
             use std::collections::HashMap;
 
             let grid = terminal.grid();
-            let mut reordered_lines: HashMap<usize, Vec<Cell>> = HashMap::new();
+            let mut reordered_lines: HashMap<usize, (Vec<Cell>, Vec<usize>)> = HashMap::new();
 
             // First pass: compute reordered lines that need BiDi.
             for cell in &grid_cells {
@@ -836,15 +837,46 @@ impl Display {
                 }
             }
 
-            // Second pass: update cells with reordered data.
-            for cell in &mut grid_cells {
-                if let Some(reordered) = reordered_lines.get(&cell.point.line) {
-                    let col = cell.point.column.0;
-                    if col < reordered.len() {
-                        cell.character = reordered[col].c;
-                        cell.flags = reordered[col].flags;
+            // Second pass: rearrange RenderableCells using the BiDi algorithm's position mapping.
+            // This uses the canonical logical→visual mapping from the BiDi algorithm,
+            // eliminating ambiguity for mixed RTL/LTR text.
+            if !reordered_lines.is_empty() {
+                // Group cells by line.
+                let mut line_cells: HashMap<usize, Vec<RenderableCell>> = HashMap::new();
+                let mut non_bidi_cells = Vec::new();
+
+                for cell in grid_cells {
+                    if reordered_lines.contains_key(&cell.point.line) {
+                        line_cells.entry(cell.point.line).or_default().push(cell);
+                    } else {
+                        non_bidi_cells.push(cell);
                     }
                 }
+
+                // For each BiDi line, apply the position mapping directly.
+                for (line_num, (_reordered, logical_to_visual)) in &reordered_lines {
+                    if let Some(cells) = line_cells.remove(line_num) {
+                        // Apply the mapping to RenderableCells.
+                        for mut cell in cells {
+                            let logical_pos = cell.point.column.0;
+                            // Direct position lookup - no character matching needed!
+                            if let Some(&visual_pos) = logical_to_visual.get(logical_pos) {
+                                cell.point.column = Column(visual_pos);
+                                non_bidi_cells.push(cell);
+                            }
+                        }
+                    }
+                }
+
+                grid_cells = non_bidi_cells;
+            }
+
+            // Mark BiDi-reordered lines as damaged (one call per line, more efficient than per-cell).
+            // This is necessary because terminal damage tracking happens before BiDi reordering, so
+            // cells that changed position (not value) won't be in the terminal's damage list.
+            for (line_num, (reordered, _mapping)) in &reordered_lines {
+                let damage = LineDamageBounds::new(*line_num, 0, reordered.len());
+                self.damage_tracker.frame().damage_line(damage);
             }
         }
 
