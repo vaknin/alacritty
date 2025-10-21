@@ -1,5 +1,8 @@
 //! Bidirectional text support.
 
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+
 use unicode_bidi::{BidiInfo, Level};
 
 use crate::grid::Row;
@@ -45,12 +48,28 @@ fn is_rtl_char(c: char) -> bool {
     )
 }
 
+/// Compute a fast hash of a line's content for cache validation.
+///
+/// Only hashes content that affects BiDi reordering (character and BiDi flags).
+#[inline]
+fn compute_line_hash(row: &Row<Cell>) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    for cell in row.into_iter() {
+        // Hash only content that affects BiDi reordering.
+        cell.c.hash(&mut hasher);
+        cell.bidi_flags().bits().hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
 /// Reorder a line of cells according to the Unicode Bidirectional Algorithm.
 ///
 /// Returns a tuple of:
 /// - Vec of cells in visual order (same length as input row)
-/// - Vec of position mappings: `logical_to_visual[logical_pos] = visual_pos`
-pub fn reorder_line(row: &Row<Cell>) -> (Vec<Cell>, Vec<usize>) {
+/// - Vec of logical→visual position mappings
+/// - Vec of visual→logical position mappings
+/// - Hash of the line content for caching
+pub fn reorder_line(row: &Row<Cell>) -> (Vec<Cell>, Vec<usize>, Vec<usize>, u64) {
     let num_cols = row.len();
 
     // Collect cells into a vec.
@@ -66,7 +85,8 @@ pub fn reorder_line(row: &Row<Cell>) -> (Vec<Cell>, Vec<usize>) {
     // If the entire line is empty, return cells as-is with identity mapping.
     if content_len == 0 {
         let identity_mapping: Vec<usize> = (0..num_cols).collect();
-        return (cells, identity_mapping);
+        let hash = compute_line_hash(row);
+        return (cells.clone(), identity_mapping.clone(), identity_mapping, hash);
     }
 
     // Extract text only from non-trailing cells.
@@ -176,30 +196,74 @@ pub fn reorder_line(row: &Row<Cell>) -> (Vec<Cell>, Vec<usize>) {
         logical_to_visual[pos] = pos;
     }
 
-    (reordered_cells, logical_to_visual)
+    // Compute hash for caching.
+    let hash = compute_line_hash(row);
+
+    (reordered_cells, logical_to_visual, visual_to_logical, hash)
+}
+
+/// Reorder a line with caching support.
+///
+/// If cache is provided and valid, returns cached result.
+/// Otherwise computes reordering and returns data for caching.
+///
+/// Returns a tuple of:
+/// - Vec of cells in visual order
+/// - Vec of logical→visual mappings
+/// - Vec of visual→logical mappings
+/// - Content hash
+/// - Whether the cache was hit (true) or miss (false)
+pub fn reorder_line_cached(
+    row: &Row<Cell>,
+    cache_entry: Option<&super::BidiCacheEntry>,
+) -> (Vec<Cell>, Vec<usize>, Vec<usize>, u64, bool) {
+    // Fast path: Check cache.
+    if let Some(entry) = cache_entry {
+        let current_hash = compute_line_hash(row);
+        if entry.content_hash == current_hash {
+            // Cache hit!
+            return (
+                entry.reordered_cells.clone(),
+                entry.logical_to_visual.clone(),
+                entry.visual_to_logical.clone(),
+                current_hash,
+                true, // cache_hit
+            );
+        }
+    }
+
+    // Cache miss: Compute reordering.
+    let (reordered, l_to_v, v_to_l, hash) = reorder_line(row);
+    (reordered, l_to_v, v_to_l, hash, false)
 }
 
 /// Convert a visual column position to logical column position for a row.
 ///
 /// If the row doesn't need BiDi reordering, returns the column unchanged.
-/// Otherwise, uses the inverse of the logical-to-visual mapping.
+/// Otherwise, uses cached visual→logical mapping for O(1) lookup if available.
 #[cfg(feature = "bidi_draft")]
-pub fn visual_column_to_logical(row: &Row<Cell>, visual_col: usize) -> usize {
+pub fn visual_column_to_logical(
+    row: &Row<Cell>,
+    visual_col: usize,
+    cache_entry: Option<&super::BidiCacheEntry>,
+) -> usize {
     if !line_needs_bidi(row) {
         return visual_col;
     }
 
-    let (_reordered, logical_to_visual) = reorder_line(row);
-
-    // Invert the mapping: find which logical position maps to this visual position.
-    for (logical_pos, &visual_pos) in logical_to_visual.iter().enumerate() {
-        if visual_pos == visual_col {
-            return logical_pos;
+    // Try cache first for fast O(1) lookup.
+    if let Some(entry) = cache_entry {
+        let current_hash = compute_line_hash(row);
+        if entry.content_hash == current_hash {
+            // Cache hit: O(1) lookup!
+            return entry.visual_to_logical.get(visual_col).copied().unwrap_or(visual_col);
         }
     }
 
-    // Fallback if visual_col is out of range or not found.
-    visual_col
+    // Cache miss: Compute full reordering and use visual→logical mapping.
+    let (_reordered, _logical_to_visual, visual_to_logical, _hash) = reorder_line(row);
+
+    visual_to_logical.get(visual_col).copied().unwrap_or(visual_col)
 }
 
 #[cfg(test)]
@@ -247,14 +311,14 @@ mod tests {
         row[Column(1)].c = 'b';
         row[Column(2)].c = 'c';
 
-        let (reordered, mapping) = reorder_line(&row);
+        let (reordered, l_to_v, _v_to_l, _hash) = reorder_line(&row);
         assert_eq!(reordered[0].c, 'a');
         assert_eq!(reordered[1].c, 'b');
         assert_eq!(reordered[2].c, 'c');
         // LTR: identity mapping
-        assert_eq!(mapping[0], 0);
-        assert_eq!(mapping[1], 1);
-        assert_eq!(mapping[2], 2);
+        assert_eq!(l_to_v[0], 0);
+        assert_eq!(l_to_v[1], 1);
+        assert_eq!(l_to_v[2], 2);
     }
 
     #[test]
@@ -265,17 +329,17 @@ mod tests {
         row[Column(2)].c = 'ו'; // vav
         row[Column(3)].c = 'ם'; // final mem
 
-        let (reordered, mapping) = reorder_line(&row);
+        let (reordered, l_to_v, _v_to_l, _hash) = reorder_line(&row);
         // RTL text should be reversed
         assert_eq!(reordered[0].c, 'ם');
         assert_eq!(reordered[1].c, 'ו');
         assert_eq!(reordered[2].c, 'ל');
         assert_eq!(reordered[3].c, 'ש');
         // RTL: reversed mapping (logical 0 → visual 3, etc.)
-        assert_eq!(mapping[0], 3);
-        assert_eq!(mapping[1], 2);
-        assert_eq!(mapping[2], 1);
-        assert_eq!(mapping[3], 0);
+        assert_eq!(l_to_v[0], 3);
+        assert_eq!(l_to_v[1], 2);
+        assert_eq!(l_to_v[2], 1);
+        assert_eq!(l_to_v[3], 0);
     }
 
     #[test]
@@ -287,15 +351,15 @@ mod tests {
         row[Column(1)].c = 'ב'; // bet
         row[Column(2)].c = 'ג'; // gimel
 
-        let (reordered, mapping) = reorder_line(&row);
+        let (reordered, l_to_v, _v_to_l, _hash) = reorder_line(&row);
         // RTL text should be reversed: אבג → גבא
         assert_eq!(reordered[0].c, 'ג', "First position should show gimel");
         assert_eq!(reordered[1].c, 'ב', "Second position should show bet");
         assert_eq!(reordered[2].c, 'א', "Third position should show alef");
         // Mapping should also be reversed
-        assert_eq!(mapping[0], 2);
-        assert_eq!(mapping[1], 1);
-        assert_eq!(mapping[2], 0);
+        assert_eq!(l_to_v[0], 2);
+        assert_eq!(l_to_v[1], 1);
+        assert_eq!(l_to_v[2], 0);
     }
 
     #[test]
@@ -307,9 +371,9 @@ mod tests {
         row[Column(2)].c = 'c';
 
         // LTR has identity mapping.
-        assert_eq!(visual_column_to_logical(&row, 0), 0);
-        assert_eq!(visual_column_to_logical(&row, 1), 1);
-        assert_eq!(visual_column_to_logical(&row, 2), 2);
+        assert_eq!(visual_column_to_logical(&row, 0, None), 0);
+        assert_eq!(visual_column_to_logical(&row, 1, None), 1);
+        assert_eq!(visual_column_to_logical(&row, 2, None), 2);
     }
 
     #[test]
@@ -325,8 +389,8 @@ mod tests {
         // visual_col 0 (see ג) → logical 2
         // visual_col 1 (see ב) → logical 1
         // visual_col 2 (see א) → logical 0
-        assert_eq!(visual_column_to_logical(&row, 0), 2);
-        assert_eq!(visual_column_to_logical(&row, 1), 1);
-        assert_eq!(visual_column_to_logical(&row, 2), 0);
+        assert_eq!(visual_column_to_logical(&row, 0, None), 2);
+        assert_eq!(visual_column_to_logical(&row, 1, None), 1);
+        assert_eq!(visual_column_to_logical(&row, 2, None), 0);
     }
 }

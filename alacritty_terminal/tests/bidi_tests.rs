@@ -329,15 +329,15 @@ fn test_ltr_between_rtl_characters() {
     row[Column(1)].c = 'a'; // latin a
     row[Column(2)].c = 'ב'; // bet
 
-    let (reordered, mapping) = bidi::reorder_line(&row);
+    let (reordered, l_to_v, _v_to_l, _hash) = bidi::reorder_line(&row);
 
     // Debug output to see what we're actually getting
     eprintln!("Logical: א a ב");
     eprintln!("Visual cells: {} {} {}", reordered[0].c, reordered[1].c, reordered[2].c);
-    eprintln!("Position mapping: {:?}", mapping);
-    eprintln!("  logical 0 (א) -> visual {}", mapping[0]);
-    eprintln!("  logical 1 (a) -> visual {}", mapping[1]);
-    eprintln!("  logical 2 (ב) -> visual {}", mapping[2]);
+    eprintln!("Position mapping: {:?}", l_to_v);
+    eprintln!("  logical 0 (א) -> visual {}", l_to_v[0]);
+    eprintln!("  logical 1 (a) -> visual {}", l_to_v[1]);
+    eprintln!("  logical 2 (ב) -> visual {}", l_to_v[2]);
 
     // With LTR base direction and isolated RTL characters,
     // the BiDi algorithm should determine the correct visual order.
@@ -358,7 +358,7 @@ fn test_reorder_line_pure_ltr() {
     row[Column(3)].c = 'l';
     row[Column(4)].c = 'o';
 
-    let (reordered, _mapping) = bidi::reorder_line(&row);
+    let (reordered, _l_to_v, _v_to_l, _hash) = bidi::reorder_line(&row);
 
     // LTR text should remain in the same order.
     assert_eq!(reordered.len(), 5);
@@ -382,7 +382,7 @@ fn test_reorder_line_pure_rtl() {
     row[Column(2)].c = 'ו'; // vav
     row[Column(3)].c = 'ם'; // mem sofit
 
-    let (reordered, _mapping) = bidi::reorder_line(&row);
+    let (reordered, _l_to_v, _v_to_l, _hash) = bidi::reorder_line(&row);
 
     // RTL text should be reversed for visual display.
     assert_eq!(reordered.len(), 4);
@@ -411,7 +411,7 @@ fn test_reorder_line_mixed_ltr_rtl() {
     row[Column(7)].c = ' ';
     row[Column(8)].c = '!';
 
-    let (reordered, _mapping) = bidi::reorder_line(&row);
+    let (reordered, _l_to_v, _v_to_l, _hash) = bidi::reorder_line(&row);
 
     // LTR part stays: "Hi "
     assert_eq!(reordered[0].c, 'H');

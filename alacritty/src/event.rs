@@ -726,9 +726,17 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
             // Convert visual column to logical column for BiDi text (feature-gated).
             #[cfg(feature = "bidi_draft")]
             {
-                let row = &self.terminal.grid()[point.line];
-                let logical_col =
-                    alacritty_terminal::term::bidi::visual_column_to_logical(row, point.column.0);
+                let grid = self.terminal.grid();
+                let row = &grid[point.line];
+
+                // Get cache entry for fast O(1) lookup.
+                let cache_entry = self.terminal.bidi_cache.get(&(point.line.0 as usize));
+
+                let logical_col = alacritty_terminal::term::bidi::visual_column_to_logical(
+                    row,
+                    point.column.0,
+                    cache_entry,
+                );
                 point.column = Column(logical_col);
             }
 
@@ -1298,9 +1306,17 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
         // Convert visual column to logical column for BiDi text (feature-gated).
         #[cfg(feature = "bidi_draft")]
         {
-            let row = &self.terminal().grid()[point.line];
-            let logical_col =
-                alacritty_terminal::term::bidi::visual_column_to_logical(row, point.column.0);
+            let grid = self.terminal().grid();
+            let row = &grid[point.line];
+
+            // Get cache entry for fast O(1) lookup.
+            let cache_entry = self.terminal().bidi_cache.get(&(point.line.0 as usize));
+
+            let logical_col = alacritty_terminal::term::bidi::visual_column_to_logical(
+                row,
+                point.column.0,
+                cache_entry,
+            );
             point.column = Column(logical_col);
         }
 

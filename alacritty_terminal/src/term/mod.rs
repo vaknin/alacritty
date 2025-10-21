@@ -267,6 +267,44 @@ impl TermDamageState {
     }
 }
 
+/// BiDi cache entry for a single line.
+#[cfg(feature = "bidi_draft")]
+#[derive(Debug, Clone)]
+pub struct BidiCacheEntry {
+    /// Hash of the line content for quick validation.
+    content_hash: u64,
+
+    /// Reordered cells in visual order.
+    reordered_cells: Vec<cell::Cell>,
+
+    /// Mapping from logical position to visual position.
+    logical_to_visual: Vec<usize>,
+
+    /// Inverse mapping from visual position to logical position.
+    visual_to_logical: Vec<usize>,
+}
+
+#[cfg(feature = "bidi_draft")]
+impl BidiCacheEntry {
+    /// Create a new BiDi cache entry.
+    pub fn new(
+        content_hash: u64,
+        reordered_cells: Vec<cell::Cell>,
+        logical_to_visual: Vec<usize>,
+    ) -> Self {
+        // Build inverse mapping from visual position to logical position.
+        let num_cols = logical_to_visual.len();
+        let mut visual_to_logical = vec![0; num_cols];
+        for (logical, &visual) in logical_to_visual.iter().enumerate() {
+            if visual < num_cols {
+                visual_to_logical[visual] = logical;
+            }
+        }
+
+        Self { content_hash, reordered_cells, logical_to_visual, visual_to_logical }
+    }
+}
+
 pub struct Term<T> {
     /// Terminal focus controlling the cursor shape.
     pub is_focused: bool,
@@ -333,6 +371,13 @@ pub struct Term<T> {
     /// Disable arrow key swapping for bidirectional text.
     #[cfg(feature = "bidi_draft")]
     pub bidi_disable_arrow_key_swapping: bool,
+
+    /// BiDi reordering cache for lines.
+    ///
+    /// Maps absolute grid line indices to their cached BiDi reordering results.
+    /// Cache is invalidated when a line's content changes.
+    #[cfg(feature = "bidi_draft")]
+    pub bidi_cache: std::collections::HashMap<usize, BidiCacheEntry>,
 }
 
 /// Configuration options for the [`Term`].
@@ -449,6 +494,8 @@ impl<T> Term<T> {
             mode: Default::default(),
             #[cfg(feature = "bidi_draft")]
             bidi_disable_arrow_key_swapping: Default::default(),
+            #[cfg(feature = "bidi_draft")]
+            bidi_cache: std::collections::HashMap::new(),
         }
     }
 
@@ -498,9 +545,27 @@ impl<T> Term<T> {
         self.damage.reset(self.columns());
     }
 
+    /// Invalidate BiDi cache for a specific line.
+    #[cfg(feature = "bidi_draft")]
+    #[inline]
+    pub fn invalidate_bidi_cache_line(&mut self, line: usize) {
+        self.bidi_cache.remove(&line);
+    }
+
+    /// Invalidate the entire BiDi cache.
+    #[cfg(feature = "bidi_draft")]
+    #[inline]
+    pub fn invalidate_bidi_cache_all(&mut self) {
+        self.bidi_cache.clear();
+    }
+
     #[inline]
     fn mark_fully_damaged(&mut self) {
         self.damage.full = true;
+
+        // Invalidate BiDi cache when entire terminal is damaged.
+        #[cfg(feature = "bidi_draft")]
+        self.invalidate_bidi_cache_all();
     }
 
     /// Set new options for the [`Term`].
@@ -1023,6 +1088,13 @@ impl<T> Term<T> {
         cursor_cell.bg = bg;
         cursor_cell.flags = flags;
         cursor_cell.extra = extra;
+
+        // Invalidate BiDi cache for the modified line.
+        #[cfg(feature = "bidi_draft")]
+        {
+            let grid_line = self.grid.cursor.point.line.0 as usize;
+            self.invalidate_bidi_cache_line(grid_line);
+        }
     }
 
     #[inline]
@@ -1217,6 +1289,10 @@ impl<T: EventListener> Handler for Term<T> {
         for cell in &mut row[source.0..destination] {
             *cell = bg.into();
         }
+
+        // Invalidate BiDi cache for the modified line.
+        #[cfg(feature = "bidi_draft")]
+        self.invalidate_bidi_cache_line(line.0 as usize);
     }
 
     #[inline]
@@ -1540,6 +1616,10 @@ impl<T: EventListener> Handler for Term<T> {
         for cell in &mut row[start..end] {
             *cell = bg.into();
         }
+
+        // Invalidate BiDi cache for the modified line.
+        #[cfg(feature = "bidi_draft")]
+        self.invalidate_bidi_cache_line(line.0 as usize);
     }
 
     #[inline]
@@ -1569,6 +1649,10 @@ impl<T: EventListener> Handler for Term<T> {
         for cell in &mut row[end..] {
             *cell = bg.into();
         }
+
+        // Invalidate BiDi cache for the modified line.
+        #[cfg(feature = "bidi_draft")]
+        self.invalidate_bidi_cache_line(line.0 as usize);
     }
 
     #[inline]

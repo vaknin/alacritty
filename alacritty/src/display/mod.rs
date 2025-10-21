@@ -816,12 +816,14 @@ impl Display {
         {
             use alacritty_terminal::term::bidi;
             use alacritty_terminal::term::cell::Cell;
+            use alacritty_terminal::term::BidiCacheEntry;
             use std::collections::HashMap;
 
             let grid = terminal.grid();
             let mut reordered_lines: HashMap<usize, (Vec<Cell>, Vec<usize>)> = HashMap::new();
+            let mut cache_updates: Vec<(usize, BidiCacheEntry)> = Vec::new();
 
-            // First pass: compute reordered lines that need BiDi.
+            // First pass: compute reordered lines that need BiDi, using cache when available.
             for cell in &grid_cells {
                 if let std::collections::hash_map::Entry::Vacant(e) =
                     reordered_lines.entry(cell.point.line)
@@ -831,9 +833,33 @@ impl Display {
                     let row = &grid[grid_line];
 
                     if bidi::line_needs_bidi(row) {
-                        e.insert(bidi::reorder_line(row));
+                        // Get absolute grid line index for cache lookup.
+                        let grid_line_idx = grid_line.0 as usize;
+
+                        // Try to use cached result.
+                        let cache_entry = terminal.bidi_cache.get(&grid_line_idx);
+                        let (reordered, l_to_v, _v_to_l, hash, cache_hit) =
+                            bidi::reorder_line_cached(row, cache_entry);
+
+                        // Collect cache updates for later (after dropping grid borrow).
+                        if !cache_hit {
+                            cache_updates.push((
+                                grid_line_idx,
+                                BidiCacheEntry::new(hash, reordered.clone(), l_to_v.clone()),
+                            ));
+                        }
+
+                        e.insert((reordered, l_to_v));
                     }
                 }
+            }
+
+            // Drop grid borrow before updating cache.
+            let _ = grid;
+
+            // Apply cache updates.
+            for (line_idx, entry) in cache_updates {
+                terminal.bidi_cache.insert(line_idx, entry);
             }
 
             // Second pass: rearrange RenderableCells using the BiDi algorithm's position mapping.

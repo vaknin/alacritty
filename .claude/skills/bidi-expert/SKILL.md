@@ -1,20 +1,155 @@
 ---
 name: bidi-expert
-description: Expert guidance for implementing Right-to-Left (RTL) and Bidirectional (BiDi) text support in Alacritty terminal emulator. Covers terminal-wg specification, Unicode BiDi Algorithm (UAX#9), escape sequences (CSI 8, SCP, 2500, 2501, 1243), Hebrew/Arabic text rendering, logical-to-visual reordering, and BiDi implementation patterns. Use when working on BiDi features, RTL text handling, or debugging character positioning issues.
+description: Implements Right-to-Left (RTL) and Bidirectional text in terminal emulators using terminal-wg spec and Unicode BiDi Algorithm (UAX#9). Handles Hebrew/Arabic rendering, logical↔visual reordering, escape sequences (CSI 8, SCP, 2500/2501/1243), position mapping, cursor movement, and display transformation. Use for BiDi features, RTL debugging, character positioning, mixed LTR/RTL bugs, or embedding level issues.
 ---
 
 # BiDi Expert for Alacritty
 
-Expert guidance for implementing Right-to-Left (RTL) and Bidirectional text support in Alacritty according to terminal-wg specification and Unicode BiDi Algorithm (UAX#9).
+Expert guidance for implementing Right-to-Left (RTL) and Bidirectional text support in terminal emulators according to terminal-wg specification and Unicode BiDi Algorithm (UAX#9).
 
-## Current Implementation Status
+## Quick Reference Cards
 
-**Phase 5 - Code Refinement**
-- ✅ Pure RTL text works correctly (Hebrew, Arabic)
-- ✅ Character reordering follows UAX#9
-- ✅ All escape sequences recognized
-- ⚠️ Mixed RTL/LTR bug: LTR letters between RTL letters may appear wrong
-- 🎯 Goal: Fix mixed text using BiDi algorithm's level information
+### When BiDi is Needed
+
+```
+✅ YES: Hebrew/Arabic text ("שלום", "مرحبا")
+✅ YES: Mixed RTL/LTR ("hello שלום world")
+✅ YES: RTL with numbers ("שלום 123")
+❌ NO:  Pure LTR text ("hello world")
+❌ NO:  Empty lines or whitespace-only
+```
+
+### Escape Sequences Quick Table
+
+| Sequence | Name | Purpose |
+|----------|------|---------|
+| `CSI 8 h` / `CSI 8 l` | BiDi Implicit Mode | Enable/disable BiDi reordering |
+| `CSI 0 SP k` | SCP Default | Context-dependent direction (usually LTR) |
+| `CSI 1 SP k` | SCP LTR | Force LTR paragraph |
+| `CSI 2 SP k` | SCP RTL | Force RTL paragraph |
+| `CSI ? 2501 h/l` | Auto-detect | Auto-detect paragraph direction |
+| `CSI ? 2500 h/l` | Box Mirroring | Mirror box-drawing chars in RTL |
+| `CSI ? 1243 h/l` | Arrow Swapping | Swap arrow keys in RTL mode |
+
+### Common Test Cases
+
+| Input | Expected Visual | Levels | Notes |
+|-------|----------------|--------|-------|
+| "hello" | "hello" | [0,0,0,0,0] | Identity mapping |
+| "שלום" | "םולש" | [1,1,1,1] | Full reversal |
+| "hello שלום world" | "hello םולש world" | [0...0, 1...1, 0...0] | Three runs |
+| "שלום!" | "!םולש" | [1,1,1,1,1] | Punctuation follows RTL |
+
+### Position Mapping Quick Check
+
+```rust
+// Logical → Visual (for cursor display)
+visual_pos = logical_to_visual[logical_pos]
+
+// Visual → Logical (for mouse clicks)
+logical_pos = visual_to_logical[visual_pos]
+
+// Build mapping using canonical algorithm
+let reordered_levels = bidi_info.reordered_levels_per_char(para, range);
+let visual_to_logical = BidiInfo::reorder_visual(&reordered_levels);
+```
+
+## Troubleshooting Guide
+
+### Problem: Characters appear in wrong positions
+
+**Diagnostic steps:**
+1. Check if line has RTL chars → Use `is_rtl_char()` check
+2. Verify BiDi mode enabled → Check `BidiMode::Implicit` in cells
+3. Inspect embedding levels → Print levels array, verify odd=RTL, even=LTR
+4. Validate position mapping → Print `logical_to_visual` array
+5. Check if using canonical mapping → Must use `reorder_visual()`, not char matching
+
+**Common causes:**
+- Using character matching instead of canonical mapping
+- Forgetting to handle multi-byte UTF-8
+- Not trimming trailing whitespace before algorithm
+- Modifying logical grid (NEVER do this)
+
+### Problem: Colors or properties not preserved
+
+**Diagnostic:**
+1. Verify entire cells moved → Check `cell.fg`, `cell.bg`, `cell.flags`
+2. Not just characters → Never copy only `cell.c`
+
+**Fix:**
+```rust
+// ❌ WRONG: Copying only character
+cell.c = reordered_char;
+
+// ✅ CORRECT: Moving entire cell
+cell.point.column = Column(visual_pos);
+reordered_cells.push(cell);
+```
+
+### Problem: Mixed RTL/LTR text incorrect
+
+**Diagnostic:**
+1. Count runs → Print number of runs from `visual_runs()`
+2. Check run boundaries → Verify each run's start/end byte indices
+3. Inspect byte→char mapping → Essential for multi-byte UTF-8
+4. Verify level changes → Levels should change at run boundaries
+
+**Example debug output:**
+```
+Text: "hello שלום world"
+Runs: 3 runs detected
+  Run 0: bytes 0-6, level 0 (LTR)
+  Run 1: bytes 6-14, level 1 (RTL)
+  Run 2: bytes 14-19, level 0 (LTR)
+```
+
+### Problem: Display glitches or flickering
+
+**Diagnostic:**
+1. Check damage tracking → BiDi lines must be manually marked
+2. Verify reordering happens after damage → Use `damage_tracker.frame().damage_line()`
+3. Check iteration order → May need reverse iteration
+
+**Fix:**
+```rust
+// After BiDi reordering, manually damage lines
+for (line_num, _) in &reordered_lines {
+    let damage = LineDamageBounds::new(*line_num, 0, num_cols);
+    self.damage_tracker.frame().damage_line(damage);
+}
+```
+
+### Problem: Performance issues
+
+**Diagnostic:**
+1. Verify fast-path check → Only run BiDi when needed
+2. Check line length → Algorithm is O(n), long lines take time
+3. Profile hot paths → Use `cargo flamegraph`
+
+**Optimization:**
+```rust
+// Fast check before running UAX#9
+fn line_needs_bidi(cells: &[Cell]) -> bool {
+    cells.iter().any(|cell| {
+        is_rtl_char(cell.c) || !cell.bidi_flags().is_empty()
+    })
+}
+
+if !line_needs_bidi(cells) {
+    return None; // Skip BiDi processing
+}
+```
+
+### Decision Tree: "Which direction should I use?"
+
+```
+Is auto-detection enabled (CSI ? 2501 h)?
+├─ YES → Use None for para_level (algorithm detects)
+└─ NO → Is explicit SCP set (CSI 1/2 SP k)?
+    ├─ YES → Use explicit level from SCP
+    └─ NO → Default to LTR (Level::ltr())
+```
 
 ## Core Principles
 
@@ -245,27 +380,34 @@ cell.point.column = Column(visual_pos);
 reordered_cells.push(cell);
 ```
 
-## Critical Bugs Fixed
+## Implementation Checklist
 
-### Bug 1: Wrong Paragraph Direction
-**Issue**: RTL text appeared right-aligned instead of left-aligned
-**Fix**: Default to LTR (level 0), not RTL
-**Lesson**: Terminals are left-aligned by default
+Use this checklist when implementing or debugging BiDi features:
 
-### Bug 2: Display Rendering Glitches
-**Issue**: Wrong characters shown temporarily
-**Fix**: Reversed iteration + per-line damage tracking
-**Lesson**: Manual damage marking required for BiDi
+**Basic Setup:**
+- [ ] Fast-path check (`line_needs_bidi()`) before running algorithm
+- [ ] Trim trailing whitespace before processing
+- [ ] Determine paragraph level correctly (default LTR)
+- [ ] Build byte→char mapping for UTF-8
 
-### Bug 3: Color Preservation
-**Issue**: Characters appeared faded after reordering
-**Fix**: Move entire cells, not just characters
-**Lesson**: Never separate character from its properties
+**Reordering:**
+- [ ] Use `visual_runs()` to get reordered runs
+- [ ] Reverse RTL runs, keep LTR runs unchanged
+- [ ] Move complete cells (character + all properties)
+- [ ] Build canonical position mapping with `reorder_visual()`
 
-### Bug 4: Mixed RTL/LTR Positioning (Current)
-**Issue**: LTR letters between RTL letters appear wrong
-**Fix**: Use canonical `reorder_visual()` mapping
-**Status**: Implementation complete, needs testing
+**Display:**
+- [ ] Apply reordering only at display time
+- [ ] Never modify logical grid
+- [ ] Manually mark BiDi lines as damaged
+- [ ] Verify colors/hyperlinks/flags preserved
+
+**Testing:**
+- [ ] Pure LTR → identity mapping
+- [ ] Pure RTL → full reversal
+- [ ] Mixed RTL/LTR → correct run boundaries
+- [ ] Multi-byte UTF-8 → no corruption
+- [ ] Trailing spaces → ignored per spec
 
 ## Key Files Reference
 
@@ -300,14 +442,6 @@ Need to implement BiDi feature?
 
 **Testing?**
 → See `references/testing_strategy.md`
-
-## Testing Quick Reference
-
-**Pure LTR**: "hello" → identity mapping [0,1,2,3,4]
-**Pure RTL**: "שלום" → full reversal [3,2,1,0], visual "םולש"
-**Mixed**: "hello שלום world" → three runs, middle reversed
-**UTF-8**: Hebrew/Arabic (3 bytes/char) → byte_to_char mapping
-**Trailing**: "שלום    " → only "שלום" processed
 
 ## References
 
