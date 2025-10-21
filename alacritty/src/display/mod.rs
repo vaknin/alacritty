@@ -32,28 +32,28 @@ use alacritty_terminal::index::{Column, Direction, Line, Point};
 use alacritty_terminal::selection::Selection;
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::{
-    self, LineDamageBounds, Term, TermDamage, TermMode, MIN_COLUMNS, MIN_SCREEN_LINES,
+    self, LineDamageBounds, MIN_COLUMNS, MIN_SCREEN_LINES, Term, TermDamage, TermMode,
 };
 use alacritty_terminal::vte::ansi::{CursorShape, NamedColor};
 
+use crate::config::UiConfig;
 use crate::config::debug::RendererPreference;
 use crate::config::font::Font;
 use crate::config::window::Dimensions;
 #[cfg(not(windows))]
 use crate::config::window::StartupMode;
-use crate::config::UiConfig;
 use crate::display::bell::VisualBell;
 use crate::display::color::{List, Rgb};
 use crate::display::content::{RenderableCell, RenderableContent, RenderableCursor};
 use crate::display::cursor::IntoRects;
-use crate::display::damage::{damage_y_to_viewport_y, DamageTracker};
+use crate::display::damage::{DamageTracker, damage_y_to_viewport_y};
 use crate::display::hint::{HintMatch, HintState};
 use crate::display::meter::Meter;
 use crate::display::window::Window;
 use crate::event::{Event, EventType, Mouse, SearchState};
 use crate::message_bar::{MessageBuffer, MessageType};
 use crate::renderer::rects::{RenderLine, RenderLines, RenderRect};
-use crate::renderer::{self, platform, GlyphCache, Renderer};
+use crate::renderer::{self, GlyphCache, Renderer, platform};
 use crate::scheduler::{Scheduler, TimerId, Topic};
 use crate::string::{ShortenDirection, StrShortener};
 
@@ -800,7 +800,6 @@ impl Display {
         let vi_mode = terminal.mode().contains(TermMode::VI);
         let vi_cursor_point = if vi_mode { Some(terminal.vi_mode_cursor.point) } else { None };
 
-
         // Add damage from the terminal.
         match terminal.damage() {
             TermDamage::Full => self.damage_tracker.frame().mark_fully_damaged(),
@@ -871,9 +870,10 @@ impl Display {
                 grid_cells = non_bidi_cells;
             }
 
-            // Mark BiDi-reordered lines as damaged (one call per line, more efficient than per-cell).
-            // This is necessary because terminal damage tracking happens before BiDi reordering, so
-            // cells that changed position (not value) won't be in the terminal's damage list.
+            // Mark BiDi-reordered lines as damaged (one call per line, more efficient than
+            // per-cell). This is necessary because terminal damage tracking happens
+            // before BiDi reordering, so cells that changed position (not value) won't
+            // be in the terminal's damage list.
             for (line_num, (reordered, _mapping)) in &reordered_lines {
                 let damage = LineDamageBounds::new(*line_num, 0, reordered.len());
                 self.damage_tracker.frame().damage_line(damage);

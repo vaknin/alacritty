@@ -727,7 +727,8 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
             #[cfg(feature = "bidi_draft")]
             {
                 let row = &self.terminal.grid()[point.line];
-                let logical_col = alacritty_terminal::term::bidi::visual_column_to_logical(row, point.column.0);
+                let logical_col =
+                    alacritty_terminal::term::bidi::visual_column_to_logical(row, point.column.0);
                 point.column = Column(logical_col);
             }
 
@@ -1298,7 +1299,8 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
         #[cfg(feature = "bidi_draft")]
         {
             let row = &self.terminal().grid()[point.line];
-            let logical_col = alacritty_terminal::term::bidi::visual_column_to_logical(row, point.column.0);
+            let logical_col =
+                alacritty_terminal::term::bidi::visual_column_to_logical(row, point.column.0);
             point.column = Column(logical_col);
         }
 
